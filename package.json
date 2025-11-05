@@ -1,0 +1,10 @@
+{
+  "name": "skedaddle-mcp-googleads",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@vercel/node": "^3.0.0",
+    "google-auth-library": "^9.0.0",
+    "zod": "^3.22.4"
+  }
+}
