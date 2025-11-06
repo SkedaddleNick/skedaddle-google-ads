@@ -1,12 +1,9 @@
 // api/mcp.ts
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-// IMPORTANT: keep the ".js" here (Vercel compiles TS to JS and Node ESM needs the extension)
+// IMPORTANT: keep the .js extension for ESM on Vercel
 import { listAdsTools, callAdsTool } from "../src/mcpAdsServer.js";
 
-/**
- * Small helper response used by GET /api/mcp and unsupported methods.
- */
 function helpPayload() {
   return {
     mcp: true,
@@ -16,14 +13,31 @@ function helpPayload() {
   };
 }
 
+// Minimal MCP initialize reply
+function initializeResult() {
+  return {
+    protocolVersion: "2025-06-18", // acceptable MCP protocol version string
+    serverInfo: { name: "skedaddle-google-ads-mcp", version: "1.0.0" },
+    // Expose both "tools" and legacy "actions" to be safe
+    capabilities: {
+      tools: { list: true, call: true },
+      actions: { list: true, call: true },
+    },
+  };
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    // Simple GET support for quick browser checks:
-    //  - /api/mcp                -> help
-    //  - /api/mcp?method=tools/list -> returns tools
+    // Optional endpoint lock-down
+    const token = process.env.MCP_BEARER_TOKEN;
+    if (token && req.headers.authorization !== `Bearer ${token}`) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    // Quick browser check
     if (req.method === "GET") {
-      const methodQ = (req.query?.method as string) || "";
-      if (methodQ === "tools/list" || methodQ === "tools.list") {
+      const q = (req.query?.method as string) || "";
+      if (q === "tools/list" || q === "tools.list") {
         const actions = listAdsTools();
         return res.status(200).json({ tools: actions, actions });
       }
@@ -35,7 +49,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(405).json({ error: "Method Not Allowed" });
     }
 
-    // Body can arrive parsed or as a string depending on platform
     const body = typeof req.body === "object" ? req.body : JSON.parse(req.body || "{}");
     const jsonrpc = body?.jsonrpc ? "2.0" : null;
     const id = body?.id ?? null;
@@ -46,14 +59,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json(jsonrpc ? { jsonrpc: "2.0", id, error } : { error });
     }
 
-    // List tools
+    // --- MCP handshake methods ---
+    if (method === "initialize") {
+      const result = initializeResult();
+      return res.status(200).json(jsonrpc ? { jsonrpc: "2.0", id, result } : result);
+    }
+    if (method === "notifications/initialized") {
+      const result = { acknowledged: true };
+      return res.status(200).json(jsonrpc ? { jsonrpc: "2.0", id, result } : result);
+    }
+
+    // --- Tools methods (both dotted and slashed forms) ---
     if (method === "tools.list" || method === "tools/list") {
       const actions = listAdsTools();
       const result = { tools: actions, actions };
       return res.status(200).json(jsonrpc ? { jsonrpc: "2.0", id, result } : result);
     }
 
-    // Call a tool
     if (method === "tools.call" || method === "tools/call") {
       const name = body?.name;
       const args = body?.arguments ?? {};
@@ -61,7 +83,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const error = { code: -32602, message: "Missing 'name' for tools.call." };
         return res.status(400).json(jsonrpc ? { jsonrpc: "2.0", id, error } : { error });
       }
-
       try {
         const result = await callAdsTool(name, args);
         return res.status(200).json(jsonrpc ? { jsonrpc: "2.0", id, result } : result);
